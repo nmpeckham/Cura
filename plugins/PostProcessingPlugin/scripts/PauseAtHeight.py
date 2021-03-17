@@ -13,6 +13,7 @@ class PauseAtHeight(Script):
         super().__init__()
 
     def getSettingDataString(self) -> str:
+        layer_height = Application.getInstance().getGlobalContainerStack().getProperty("layer_height", "value")
         return """{
             "name": "Pause at height",
             "key": "PauseAtHeight",
@@ -26,7 +27,7 @@ class PauseAtHeight(Script):
                     "description": "Whether to pause at a certain height or at a certain layer.",
                     "type": "enum",
                     "options": {"height": "Height", "layer_no": "Layer Number"},
-                    "default_value": "height"
+                    "default_value": "layer_no"
                 },
                 "pause_height":
                 {
@@ -102,7 +103,7 @@ class PauseAtHeight(Script):
                     "description": "How much filament must be retracted at pause.",
                     "unit": "mm",
                     "type": "float",
-                    "default_value": 0,
+                    "default_value": 25,
                     "enabled": "pause_method != \\\"griffin\\\""
                 },
                 "retraction_speed":
@@ -145,7 +146,7 @@ class PauseAtHeight(Script):
                     "description": "Change the temperature during the pause.",
                     "unit": "°C",
                     "type": "int",
-                    "default_value": 0,
+                    "default_value": 200,
                     "enabled": "pause_method not in [\\\"griffin\\\", \\\"repetier\\\"]"
                 },
                 "display_text":
@@ -197,6 +198,20 @@ class PauseAtHeight(Script):
                     "description": "Any custom g-code to run after the pause, for example, M300 S440 P200 to beep.",
                     "type": "str",
                     "default_value": ""
+                },
+                "resume_correction_height": 
+                {
+                    "label": "Resume Correction Height",
+                    "description": "Amount to move down after resume to improve layer adhesion",
+                    "type": "float",
+                    "default_value": """ + str(layer_height) + """
+                },
+                "beep_on_pause":
+                {
+                    "label": "Beep On Pause",
+                    "description": "Whether machine should beep to notify pause has occured",
+                    "type": "bool",
+                    "default_value": true
                 }
             }
         }"""
@@ -251,6 +266,8 @@ class PauseAtHeight(Script):
         display_text = self.getSettingValueByKey("display_text")
         gcode_before = self.getSettingValueByKey("custom_gcode_before_pause")
         gcode_after = self.getSettingValueByKey("custom_gcode_after_pause")
+        resume_correction_height = self.getSettingValueByKey("resume_correction_height")
+        beep_on_pause = self.getSettingValueByKey("beep_on_pause")
 
         pause_method = self.getSettingValueByKey("pause_method")
         pause_command = {
@@ -306,7 +323,7 @@ class PauseAtHeight(Script):
 
                 # If a Z instruction is in the line, read the current Z
                 if self.getValue(line, "Z") is not None:
-                    current_z = self.getValue(line, "Z")
+                    current_z = self.getValue(line, "Z") - resume_correction_height
 
                 if pause_at == "height":
                     # Ignore if the line is not G1 or G0
@@ -388,7 +405,7 @@ class PauseAtHeight(Script):
                         prepend_gcode += self.putValue(G = 1, E = retraction_amount, F = 6000) + "\n"
 
                     #Move the head away
-                    prepend_gcode += self.putValue(G = 1, Z = current_z + 1, F = 300) + " ; move up a millimeter to get out of the way\n"
+                    prepend_gcode += self.putValue(G = 1, Z = current_z + 5 + resume_correction_height, F = 300) + " ; move up 5 millimeters to get out of the way\n"
                     prepend_gcode += self.putValue(G = 1, X = park_x, Y = park_y, F = 9000) + "\n"
                     if current_z < move_z:
                         prepend_gcode += self.putValue(G = 1, Z = current_z + move_z, F = 300) + "\n"
@@ -408,7 +425,7 @@ class PauseAtHeight(Script):
                             prepend_gcode += self.putValue(G = 1, E = -retraction_amount, F = retraction_speed * 60) + "\n"
 
                     # Move the head away
-                    prepend_gcode += self.putValue(G = 1, Z = current_z + 1, F = 300) + " ; move up a millimeter to get out of the way\n"
+                    prepend_gcode += self.putValue(G = 1, Z = current_z + 5 + resume_correction_height, F = 300) + " ; move up a millimeter to get out of the way\n"
 
                     # This line should be ok
                     prepend_gcode += self.putValue(G = 1, X = park_x, Y = park_y, F = 9000) + "\n"
@@ -430,6 +447,12 @@ class PauseAtHeight(Script):
                 # Set a custom GCODE section before pause
                 if gcode_before:
                     prepend_gcode += gcode_before + "\n"
+
+                if(beep_on_pause):
+                    prepend_gcode += self.putValue(M=300, S=260, P=150) + "\n"
+                    prepend_gcode += self.putValue(M=300, S=260, P=150) + "\n"
+                    prepend_gcode += self.putValue(M=300, S=523, P=450) + "\n"
+                    prepend_gcode += self.putValue(M=300, S=440, P=450) + "; Play a little tune\n"
 
                 # Wait till the user continues printing
                 prepend_gcode += pause_command + " ; Do the actual pause\n"
